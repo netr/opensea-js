@@ -1246,7 +1246,7 @@ export class OpenSeaPort {
   }
 
   /**
-   * Fullfill or "take" an order for an asset, either a buy or sell order
+   * Create or "take" an order for an asset, either a buy or sell order
    * @param param0 __namedParamaters Object
    * @param order The order to fulfill, a.k.a. "take"
    * @param accountAddress The taker's wallet address
@@ -1284,7 +1284,7 @@ export class OpenSeaPort {
       gasAmount,
     });
 
-    return await this._getAtomicData({
+    return await OpenSeaPort._getAtomicData({
       buy,
       sell,
       accountAddress,
@@ -1293,7 +1293,51 @@ export class OpenSeaPort {
     });
   }
 
-  private async _getAtomicData({
+  /**
+   * Create or "take" an order for an asset, either a buy or sell order
+   * @param param0 __namedParamaters Object
+   * @param order The order to fulfill, a.k.a. "take"
+   * @param accountAddress The taker's wallet address
+   * @param recipientAddress The optional address to receive the order's item(s) or curriencies. If not specified, defaults to accountAddress.
+   * @param referrerAddress The optional address that referred the order
+   * @returns Transaction hash for fulfilling the order
+   */
+  public async validateAndCreateOrder({
+    order,
+    accountAddress,
+    recipientAddress,
+    referrerAddress,
+  }: {
+    order: Order;
+    accountAddress: string;
+    recipientAddress?: string;
+    referrerAddress?: string;
+  }): Promise<OrderData> {
+    const matchingOrder = this._makeMatchingOrder({
+      order,
+      accountAddress,
+      recipientAddress: recipientAddress || accountAddress,
+      dontValidate: true,
+    });
+    const { buy, sell } = assignOrdersToSides(order, matchingOrder);
+    const metadata = this._getMetadata(order, referrerAddress);
+
+    console.log({
+      buy,
+      sell,
+      accountAddress,
+      metadata,
+    });
+
+    return await this._getValidatedAtomicData({
+      buy,
+      sell,
+      accountAddress,
+      metadata,
+    });
+  }
+
+  private static async _getAtomicData({
     buy,
     sell,
     accountAddress,
@@ -1306,6 +1350,120 @@ export class OpenSeaPort {
     gasAmount?: number;
   }): Promise<OrderData> {
     let value;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const txnData: any = { from: accountAddress, value };
+    const args: WyvernAtomicMatchParameters = [
+      [
+        buy.exchange,
+        buy.maker,
+        buy.taker,
+        buy.feeRecipient,
+        buy.target,
+        buy.staticTarget,
+        buy.paymentToken,
+        sell.exchange,
+        sell.maker,
+        sell.taker,
+        sell.feeRecipient,
+        sell.target,
+        sell.staticTarget,
+        sell.paymentToken,
+      ],
+      [
+        buy.makerRelayerFee,
+        buy.takerRelayerFee,
+        buy.makerProtocolFee,
+        buy.takerProtocolFee,
+        buy.basePrice,
+        buy.extra,
+        buy.listingTime,
+        buy.expirationTime,
+        buy.salt,
+        sell.makerRelayerFee,
+        sell.takerRelayerFee,
+        sell.makerProtocolFee,
+        sell.takerProtocolFee,
+        sell.basePrice,
+        sell.extra,
+        sell.listingTime,
+        sell.expirationTime,
+        sell.salt,
+      ],
+      [
+        buy.feeMethod,
+        buy.side,
+        buy.saleKind,
+        buy.howToCall,
+        sell.feeMethod,
+        sell.side,
+        sell.saleKind,
+        sell.howToCall,
+      ],
+      buy.calldata,
+      sell.calldata,
+      buy.replacementPattern,
+      sell.replacementPattern,
+      buy.staticExtradata,
+      sell.staticExtradata,
+      [buy.v || 0, sell.v || 0],
+      [
+        buy.r || NULL_BLOCK_HASH,
+        buy.s || NULL_BLOCK_HASH,
+        sell.r || NULL_BLOCK_HASH,
+        sell.s || NULL_BLOCK_HASH,
+        metadata,
+      ],
+    ];
+
+    return { args, txData: txnData };
+  }
+
+  private async _getValidatedAtomicData({
+    buy,
+    sell,
+    accountAddress,
+    metadata = NULL_BLOCK_HASH,
+  }: {
+    buy: Order;
+    sell: Order;
+    accountAddress: string;
+    metadata?: string;
+  }): Promise<OrderData> {
+    let value;
+    let shouldValidateBuy = true;
+    let shouldValidateSell = true;
+
+    if (sell.maker.toLowerCase() == accountAddress.toLowerCase()) {
+      // USER IS THE SELLER, only validate the buy order
+      await this._sellOrderValidationAndApprovals({
+        order: sell,
+        accountAddress,
+      });
+      shouldValidateSell = false;
+    } else if (buy.maker.toLowerCase() == accountAddress.toLowerCase()) {
+      // USER IS THE BUYER, only validate the sell order
+      await this._buyOrderValidationAndApprovals({
+        order: buy,
+        counterOrder: sell,
+        accountAddress,
+      });
+      shouldValidateBuy = false;
+
+      // If using ETH to pay, set the value of the transaction to the current price
+      if (buy.paymentToken == NULL_ADDRESS) {
+        value = await this._getRequiredAmountForTakingSellOrder(sell);
+      }
+    } else {
+      // User is neither - matching service
+    }
+
+    await this._validateMatch({
+      buy,
+      sell,
+      accountAddress,
+      shouldValidateBuy,
+      shouldValidateSell,
+    });
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const txnData: any = { from: accountAddress, value };
     const args: WyvernAtomicMatchParameters = [
