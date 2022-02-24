@@ -130,6 +130,22 @@ import {
   wyvern2_2ConfigByNetwork,
 } from "./utils/utils";
 
+interface CallTxDataBase {
+  to?: string;
+  value?: number | string | BigNumber;
+  gas?: number | string | BigNumber;
+  gasPrice?: number | string | BigNumber;
+  data?: string;
+  nonce?: number;
+}
+interface TxData extends CallTxDataBase {
+  from: string;
+}
+type OrderData = {
+  args?: WyvernAtomicMatchParameters;
+  txData?: TxData;
+};
+
 export class OpenSeaPort {
   // Web3 instance to use
   public web3: Web3;
@@ -1192,11 +1208,13 @@ export class OpenSeaPort {
     accountAddress,
     recipientAddress,
     referrerAddress,
+    gasAmount = 0,
   }: {
     order: Order;
     accountAddress: string;
     recipientAddress?: string;
     referrerAddress?: string;
+    gasAmount?: number;
   }): Promise<string> {
     const matchingOrder = this._makeMatchingOrder({
       order,
@@ -1212,6 +1230,7 @@ export class OpenSeaPort {
       sell,
       accountAddress,
       metadata,
+      gasAmount,
     });
 
     await this._confirmTransaction(
@@ -1224,6 +1243,169 @@ export class OpenSeaPort {
       }
     );
     return transactionHash;
+  }
+
+  /**
+   * Fullfill or "take" an order for an asset, either a buy or sell order
+   * @param param0 __namedParamaters Object
+   * @param order The order to fulfill, a.k.a. "take"
+   * @param accountAddress The taker's wallet address
+   * @param recipientAddress The optional address to receive the order's item(s) or curriencies. If not specified, defaults to accountAddress.
+   * @param referrerAddress The optional address that referred the order
+   * @returns Transaction hash for fulfilling the order
+   */
+  public async createOrder({
+    order,
+    accountAddress,
+    recipientAddress,
+    referrerAddress,
+    gasAmount = 0,
+  }: {
+    order: Order;
+    accountAddress: string;
+    recipientAddress?: string;
+    referrerAddress?: string;
+    gasAmount?: number;
+  }): Promise<OrderData> {
+    const matchingOrder = this._makeMatchingOrder({
+      order,
+      accountAddress,
+      recipientAddress: recipientAddress || accountAddress,
+    });
+
+    const { buy, sell } = assignOrdersToSides(order, matchingOrder);
+
+    const metadata = this._getMetadata(order, referrerAddress);
+    return await this._getAtomicData({
+      buy,
+      sell,
+      accountAddress,
+      metadata,
+      gasAmount,
+    });
+  }
+
+  private async _getAtomicData({
+    buy,
+    sell,
+    accountAddress,
+    metadata = NULL_BLOCK_HASH,
+  }: {
+    buy: Order;
+    sell: Order;
+    accountAddress: string;
+    metadata?: string;
+    gasAmount?: number;
+  }): Promise<OrderData> {
+    let value;
+    let shouldValidateBuy = true;
+    let shouldValidateSell = true;
+
+    if (sell.maker.toLowerCase() == accountAddress.toLowerCase()) {
+      // USER IS THE SELLER, only validate the buy order
+      await this._sellOrderValidationAndApprovals({
+        order: sell,
+        accountAddress,
+      });
+      shouldValidateSell = false;
+    } else if (buy.maker.toLowerCase() == accountAddress.toLowerCase()) {
+      // USER IS THE BUYER, only validate the sell order
+      await this._buyOrderValidationAndApprovals({
+        order: buy,
+        counterOrder: sell,
+        accountAddress,
+      });
+      shouldValidateBuy = false;
+
+      // If using ETH to pay, set the value of the transaction to the current price
+      if (buy.paymentToken == NULL_ADDRESS) {
+        value = await this._getRequiredAmountForTakingSellOrder(sell);
+      }
+    } else {
+      // User is neither - matching service
+    }
+
+    await this._validateMatch({
+      buy,
+      sell,
+      accountAddress,
+      shouldValidateBuy,
+      shouldValidateSell,
+    });
+
+    this._dispatch(EventType.MatchOrders, {
+      buy,
+      sell,
+      accountAddress,
+      matchMetadata: metadata,
+    });
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const txnData: any = { from: accountAddress, value };
+    const args: WyvernAtomicMatchParameters = [
+      [
+        buy.exchange,
+        buy.maker,
+        buy.taker,
+        buy.feeRecipient,
+        buy.target,
+        buy.staticTarget,
+        buy.paymentToken,
+        sell.exchange,
+        sell.maker,
+        sell.taker,
+        sell.feeRecipient,
+        sell.target,
+        sell.staticTarget,
+        sell.paymentToken,
+      ],
+      [
+        buy.makerRelayerFee,
+        buy.takerRelayerFee,
+        buy.makerProtocolFee,
+        buy.takerProtocolFee,
+        buy.basePrice,
+        buy.extra,
+        buy.listingTime,
+        buy.expirationTime,
+        buy.salt,
+        sell.makerRelayerFee,
+        sell.takerRelayerFee,
+        sell.makerProtocolFee,
+        sell.takerProtocolFee,
+        sell.basePrice,
+        sell.extra,
+        sell.listingTime,
+        sell.expirationTime,
+        sell.salt,
+      ],
+      [
+        buy.feeMethod,
+        buy.side,
+        buy.saleKind,
+        buy.howToCall,
+        sell.feeMethod,
+        sell.side,
+        sell.saleKind,
+        sell.howToCall,
+      ],
+      buy.calldata,
+      sell.calldata,
+      buy.replacementPattern,
+      sell.replacementPattern,
+      buy.staticExtradata,
+      sell.staticExtradata,
+      [buy.v || 0, sell.v || 0],
+      [
+        buy.r || NULL_BLOCK_HASH,
+        buy.s || NULL_BLOCK_HASH,
+        sell.r || NULL_BLOCK_HASH,
+        sell.s || NULL_BLOCK_HASH,
+        metadata,
+      ],
+    ];
+
+    return { args, txData: txnData };
   }
 
   /**
@@ -4057,11 +4239,13 @@ export class OpenSeaPort {
     sell,
     accountAddress,
     metadata = NULL_BLOCK_HASH,
+    gasAmount = 0,
   }: {
     buy: Order;
     sell: Order;
     accountAddress: string;
     metadata?: string;
+    gasAmount?: number;
   }) {
     let value;
     let shouldValidateBuy = true;
@@ -4193,8 +4377,11 @@ export class OpenSeaPort {
           args[10],
           txnData
         );
+      if (gasAmount == 0) {
+        gasAmount = this._correctGasAmount(gasEstimate);
+      }
 
-      txnData.gas = this._correctGasAmount(gasEstimate);
+      txnData.gas = gasAmount;
     } catch (error) {
       console.error(`Failed atomic match with args: `, args, error);
       throw new Error(
