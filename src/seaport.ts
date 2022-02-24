@@ -1271,6 +1271,7 @@ export class OpenSeaPort {
       order,
       accountAddress,
       recipientAddress: recipientAddress || accountAddress,
+      dontValidate: true,
     });
 
     const { buy, sell } = assignOrdersToSides(order, matchingOrder);
@@ -3342,12 +3343,16 @@ export class OpenSeaPort {
     order,
     accountAddress,
     recipientAddress,
+    dontValidate = false,
   }: {
     order: UnsignedOrder;
     accountAddress: string;
     recipientAddress: string;
+    dontValidate?: boolean;
   }): UnsignedOrder {
-    accountAddress = validateAndFormatWalletAddress(this.web3, accountAddress);
+    accountAddress = dontValidate
+      ? accountAddress.toLowerCase()
+      : validateAndFormatWalletAddress(this.web3, accountAddress);
     recipientAddress = validateAndFormatWalletAddress(
       this.web3,
       recipientAddress
