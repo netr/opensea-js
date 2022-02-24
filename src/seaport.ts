@@ -3353,10 +3353,10 @@ export class OpenSeaPort {
     accountAddress = dontValidate
       ? accountAddress.toLowerCase()
       : validateAndFormatWalletAddress(this.web3, accountAddress);
-    recipientAddress = validateAndFormatWalletAddress(
-      this.web3,
-      recipientAddress
-    );
+
+    recipientAddress = dontValidate
+      ? recipientAddress.toLowerCase()
+      : validateAndFormatWalletAddress(this.web3, recipientAddress);
 
     const computeOrderParams = () => {
       const shouldValidate =
