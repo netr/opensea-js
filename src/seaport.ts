@@ -1273,10 +1273,17 @@ export class OpenSeaPort {
       recipientAddress: recipientAddress || accountAddress,
       dontValidate: true,
     });
-
     const { buy, sell } = assignOrdersToSides(order, matchingOrder);
-
     const metadata = this._getMetadata(order, referrerAddress);
+
+    console.log({
+      buy,
+      sell,
+      accountAddress,
+      metadata,
+      gasAmount,
+    });
+
     return await this._getAtomicData({
       buy,
       sell,
@@ -1299,48 +1306,6 @@ export class OpenSeaPort {
     gasAmount?: number;
   }): Promise<OrderData> {
     let value;
-    let shouldValidateBuy = true;
-    let shouldValidateSell = true;
-
-    if (sell.maker.toLowerCase() == accountAddress.toLowerCase()) {
-      // USER IS THE SELLER, only validate the buy order
-      await this._sellOrderValidationAndApprovals({
-        order: sell,
-        accountAddress,
-      });
-      shouldValidateSell = false;
-    } else if (buy.maker.toLowerCase() == accountAddress.toLowerCase()) {
-      // USER IS THE BUYER, only validate the sell order
-      await this._buyOrderValidationAndApprovals({
-        order: buy,
-        counterOrder: sell,
-        accountAddress,
-      });
-      shouldValidateBuy = false;
-
-      // If using ETH to pay, set the value of the transaction to the current price
-      if (buy.paymentToken == NULL_ADDRESS) {
-        value = await this._getRequiredAmountForTakingSellOrder(sell);
-      }
-    } else {
-      // User is neither - matching service
-    }
-
-    await this._validateMatch({
-      buy,
-      sell,
-      accountAddress,
-      shouldValidateBuy,
-      shouldValidateSell,
-    });
-
-    this._dispatch(EventType.MatchOrders, {
-      buy,
-      sell,
-      accountAddress,
-      matchMetadata: metadata,
-    });
-
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const txnData: any = { from: accountAddress, value };
     const args: WyvernAtomicMatchParameters = [
