@@ -141,7 +141,7 @@ interface CallTxDataBase {
 interface TxData extends CallTxDataBase {
   from: string;
 }
-type OrderData = {
+export type OrderData = {
   args?: WyvernAtomicMatchParameters;
   txData?: TxData;
 };
@@ -1276,7 +1276,7 @@ export class OpenSeaPort {
     const { buy, sell } = assignOrdersToSides(order, matchingOrder);
 
     const metadata = this._getMetadata(order, referrerAddress);
-    return await this._getAtomicData({
+    return this._getAtomicData({
       buy,
       sell,
       accountAddress,
