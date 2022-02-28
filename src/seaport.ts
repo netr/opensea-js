@@ -1276,14 +1276,6 @@ export class OpenSeaPort {
     const { buy, sell } = assignOrdersToSides(order, matchingOrder);
     const metadata = this._getMetadata(order, referrerAddress);
 
-    console.log({
-      buy,
-      sell,
-      accountAddress,
-      metadata,
-      gasAmount,
-    });
-
     return await OpenSeaPort._getAtomicData({
       buy,
       sell,
